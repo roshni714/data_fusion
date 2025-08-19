@@ -18,6 +18,7 @@ conda activate new_env
 To reproduce figures from paper, run the following command to launch all experiments.
 
 ```
+cd data_fusion
 chmod +x run_scripts.sh
 ./run_scripts.sh
 ```

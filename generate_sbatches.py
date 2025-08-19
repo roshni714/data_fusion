@@ -26,13 +26,11 @@ SBATCH_PREFACE = """#!/bin/bash
 #SBATCH --output="{}/{}_out.log"\n
 """
 
-OUTPUT_PATH = "/home/users/rsahoo/zfs/gsb/intermediate-yens/rsahoo/survey/scripts"
+OUTPUT_PATH = "scripts"
 
 
 def generate_learn_run(indicator):
     configs = os.listdir(f"configs/{indicator}")
-    # "state_adjusted_balancing_republican_pct_age_cat_lamb=1.0.yaml",
-    # "state_adjusted_balancing_republican_pct_age_cat_education_lamb=1.0.yaml"]
     for config in configs:
         exp_id = indicator + "_" + config
         script_fn = os.path.join(OUTPUT_PATH, "{}.sh".format(exp_id))
@@ -47,6 +45,5 @@ def generate_learn_run(indicator):
 
 
 indicators = ["medicaid_ins", "snap", "RECVDVACC"]
-# indicators=["RECVDVACC"]
 for indicator in indicators:
     generate_learn_run(indicator)
