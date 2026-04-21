@@ -11,33 +11,8 @@ def get_covariate_ratio_classifier(online_survey_dataset, census_dataset):
         online_survey_dataset: The online survey dataset.
         census_dataset: The census dataset.
     """
-
-    # cols= ["avg_hh_size",
-    #     "edu_hs_or_less",
-    #     "english_only",
-    #     "female_never_married",
-    #     "fertility_rate",
-    #     "food_stamps",
-    #     "graduate_degree",
-    #     "hh_computer",
-    #     "hh_internet",
-    #     "male_never_married",
-    #     "mean_income",
-    #     "median_house_value",
-    #     "median_income",
-    #     "median_rent",
-    #     "poverty",
-    #     "some_college_or_2yr",
-    #     "unemployment_rate",
-    #     "us_born",
-    #     "veterans",
-    #     "republican_pct",
-    #     "tot_pop"]
-    # idx = online_survey_dataset.get_covariates_idx(covariates_list=cols)
     X_census, r = census_dataset.get_data(normalize_weight=True)
     X_online, _, _ = online_survey_dataset.get_data()
-    # X_online = X_online[:, idx]
-    # X_census = X_census[:, idx]
 
     sample_idxs = np.random.choice(
         X_census.shape[0], size=X_online.shape[0], replace=True, p=r
@@ -55,7 +30,6 @@ def get_covariate_ratio_classifier(online_survey_dataset, census_dataset):
     classifier.fit(X, y)
 
     def covariate_ratio(X):
-        # X = X[:, idx]
         X = (X - X_mean) / X_std
         proba = classifier.predict_proba(X)[:, 0]
         ratio = (1 - proba) / proba
