@@ -1,6 +1,67 @@
 from splines import CovariateSpline
 import torch
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+
+def get_covariate_ratio_classifier(online_survey_dataset, census_dataset):
+    """
+    Computes the covariate ratio for the given online survey dataset, census dataset
+    Args:
+        online_survey_dataset: The online survey dataset.
+        census_dataset: The census dataset.
+    """
+
+    # cols= ["avg_hh_size",
+    #     "edu_hs_or_less",
+    #     "english_only",
+    #     "female_never_married",
+    #     "fertility_rate",
+    #     "food_stamps",
+    #     "graduate_degree",
+    #     "hh_computer",
+    #     "hh_internet",
+    #     "male_never_married",
+    #     "mean_income",
+    #     "median_house_value",
+    #     "median_income",
+    #     "median_rent",
+    #     "poverty",
+    #     "some_college_or_2yr",
+    #     "unemployment_rate",
+    #     "us_born",
+    #     "veterans",
+    #     "republican_pct",
+    #     "tot_pop"]
+    # idx = online_survey_dataset.get_covariates_idx(covariates_list=cols)
+    X_census, r = census_dataset.get_data(normalize_weight=True)
+    X_online, _, _ = online_survey_dataset.get_data()
+    # X_online = X_online[:, idx]
+    # X_census = X_census[:, idx]
+
+    sample_idxs = np.random.choice(
+        X_census.shape[0], size=X_online.shape[0], replace=True, p=r
+    )
+    X_census_samples = X_census[sample_idxs]
+
+    classifier = LogisticRegression()
+    X = np.vstack((X_online, X_census_samples))
+    X_mean = np.mean(X, axis=0).reshape(1, -1)
+    X_std = np.std(X, axis=0).reshape(1, -1) + 1e-6
+
+    X = (X - X_mean) / X_std
+    y = np.hstack((np.zeros(X_online.shape[0]), np.ones(X_census_samples.shape[0])))
+
+    classifier.fit(X, y)
+
+    def covariate_ratio(X):
+        # X = X[:, idx]
+        X = (X - X_mean) / X_std
+        proba = classifier.predict_proba(X)[:, 0]
+        ratio = (1 - proba) / proba
+        return ratio
+
+    return covariate_ratio
 
 
 def get_log_partition_function_samples(basis_online, gamma):

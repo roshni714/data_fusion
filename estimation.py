@@ -7,7 +7,21 @@ from splines import (
     TiltingSpline,
     ConstraintSpline,
 )
-from inference import BinaryStatisticalInference
+from inference import BinaryCrossFitInference, get_ci
+
+from regressor import get_binary_conditional_predictor
+from covariate_balance import get_covariate_balance, get_covariate_ratio_classifier
+from data_utils import split
+
+
+def get_raw_state_estimates(indicator, online_survey_dataset, evaluation_group):
+
+    res = online_survey_dataset.df.groupby(evaluation_group).apply(
+        lambda x: x[indicator].mean()
+    )
+    res = res.reset_index()
+    res = res.rename(columns={0: indicator})
+    return res
 
 
 def get_state_estimates(indicator, predictor, census_dataset, evaluation_group):
@@ -37,6 +51,38 @@ def get_state_estimates(indicator, predictor, census_dataset, evaluation_group):
         estimates.append(res)
     df = pd.DataFrame(estimates)
     return df
+
+
+def get_nuisance_parameters(online_survey_dataset, census_dataset):
+    online_survey_dataset1, online_survey_dataset2 = split(
+        online_survey_dataset, frac=0.5, seed=144379
+    )
+
+    online1_train, online1_val = split(online_survey_dataset1, frac=0.7, seed=144379)
+    online2_train, online2_val = split(online_survey_dataset2, frac=0.7, seed=144379)
+
+    covariate_ratio1 = get_covariate_ratio_classifier(
+        online_survey_dataset1, census_dataset
+    )
+    covariate_ratio2 = get_covariate_ratio_classifier(
+        online_survey_dataset2, census_dataset
+    )
+
+    mu1 = get_binary_conditional_predictor(
+        online1_train, online1_val, covariate_ratio=covariate_ratio1
+    )[0]
+    mu2 = get_binary_conditional_predictor(
+        online2_train, online2_val, covariate_ratio=covariate_ratio2
+    )[0]
+
+    return (
+        mu1,
+        mu2,
+        covariate_ratio1,
+        covariate_ratio2,
+        online_survey_dataset1,
+        online_survey_dataset2,
+    )
 
 
 class EstimatorsContinuousOutcome:
@@ -74,7 +120,7 @@ class EstimatorsContinuousOutcome:
         self.eta_vectors = self.tilting_spline.get_spline(
             X, self.y_grid
         )  # n x d_tilting x m
-        self.psi_vectors = self.constraint_spline.get_spline(
+        self.gamma_vectors = self.constraint_spline.get_spline(
             state_col, self.y_grid
         )  # n x d_constraints x m
 
@@ -111,26 +157,26 @@ class EstimatorsContinuousOutcome:
 
     def get_m(self):
         probs_transpose = self.probs[:, None, :, :]  # n x 1 x m x 1
-        psi_new = self.psi_vectors[:, :, :, None]  # n x d_constraints x m x 1
-        probs_repeat_psi = np.tile(
-            probs_transpose, (1, psi_new.shape[1], 1, 1)
+        gamma_new = self.gamma_vectors[:, :, :, None]  # n x d_constraints x m x 1
+        probs_repeat_gamma = np.tile(
+            probs_transpose, (1, gamma_new.shape[1], 1, 1)
         )  # n x d_constraints x m x 1
-        psi = np.trapezoid(
-            psi_new * probs_repeat_psi, self.y_grid.flatten(), axis=2
+        gamma = np.trapezoid(
+            gamma_new * probs_repeat_gamma, self.y_grid.flatten(), axis=2
         )  # n x d_constraints x 1
-        res = psi * self.weight[:, :, None]
+        res = gamma * self.weight[:, :, None]
         res = res.sum(axis=0)  # d_tilting x 1
         return res
 
     def get_B_matrix(self):
-        psi_transposed = np.transpose(self.psi_vectors, (0, 2, 1))[
+        gamma_transposed = np.transpose(self.gamma_vectors, (0, 2, 1))[
             :, :, :, None
         ]  # n x m x d_constraints x 1
         eta_transposed = np.transpose(self.eta_vectors, (0, 2, 1))[
             :, :, None, :
         ]  # n x m x 1 x d_tilting
         term1 = np.matmul(
-            psi_transposed,
+            gamma_transposed,
             eta_transposed,
         )  # n x m x d_constraints x d_tilting
         probs_repeat_term1 = np.tile(
@@ -144,12 +190,12 @@ class EstimatorsContinuousOutcome:
         )  # n x d_constraints x d_tilting
 
         probs_transpose = self.probs[:, None, :, :]  # n x 1 x m x 1
-        psi_new = self.psi_vectors[:, :, :, None]  # n x d_constraints x m x 1
-        probs_repeat_psi = np.tile(
-            probs_transpose, (1, psi_new.shape[1], 1, 1)
+        gamma_new = self.gamma_vectors[:, :, :, None]  # n x d_constraints x m x 1
+        probs_repeat_gamma = np.tile(
+            probs_transpose, (1, gamma_new.shape[1], 1, 1)
         )  # n x d_constraints x m x 1
-        psi = np.trapezoid(
-            psi_new * probs_repeat_psi, self.y_grid.flatten(), axis=2
+        gamma = np.trapezoid(
+            gamma_new * probs_repeat_gamma, self.y_grid.flatten(), axis=2
         )  # n x d_constraints x 1
 
         eta_new = self.eta_vectors[:, :, :, None]  # n x d_tilting x m x 1
@@ -161,7 +207,7 @@ class EstimatorsContinuousOutcome:
         )  # n x d_tilting x 1
 
         term2_res = (
-            np.matmul(psi, np.transpose(eta, (0, 2, 1))) * self.weight[:, :, None]
+            np.matmul(gamma, np.transpose(eta, (0, 2, 1))) * self.weight[:, :, None]
         )  # n x d_constraints x d_tilting
         B = np.sum(term1_res - term2_res, axis=0)
         return np.vstack([B, -B])  # 2 * d_constraints x d_tilting
@@ -236,10 +282,10 @@ class EstimatorsContinuousOutcome:
         Returns a tensor of shape d_constraints x d_tilting x d_tilting
         """
         first_part = np.einsum(
-            "bkl,bjl->bkjl", self.psi_vectors, self.eta_vectors
+            "bkl,bjl->bkjl", self.gamma_vectors, self.eta_vectors
         )  # n x d_constraints x d_tilting x m
         d_tilting = self.eta_vectors.shape[1]
-        d_constraints = self.psi_vectors.shape[1]
+        d_constraints = self.gamma_vectors.shape[1]
         probs_repeat = np.tile(self.probs[:, None, :, :], (1, d_tilting, 1, 1))
         eta_dot = (
             probs_repeat * self.eta_vectors[:, :, :, None]
@@ -281,35 +327,37 @@ class EstimatorsContinuousOutcome:
             inner_cov_eta_w_probs, self.y_grid.flatten(), axis=3
         )  # n x d_tilting x d_tilting
         probs_repeat_4 = np.tile(self.probs[:, None, :, :], (1, d_constraints, 1, 1))
-        psi_dot = (
-            self.psi_vectors[:, :, :, None] * probs_repeat_4
+        gamma_dot = (
+            self.gamma_vectors[:, :, :, None] * probs_repeat_4
         )  # n x d_constraints x m
-        expectation_psi = np.trapezoid(psi_dot, self.y_grid.flatten(), axis=2).squeeze(
+        expectation_gamma = np.trapezoid(
+            gamma_dot, self.y_grid.flatten(), axis=2
+        ).squeeze(
             -1
         )  # n x d_constraints x 1
         tensor2 = np.einsum(
-            "bi, bkl -> bikl", expectation_psi, cov_eta
+            "bi, bkl -> bikl", expectation_gamma, cov_eta
         )  # n x d_constraints x d_tilting x d_tilting
         C2_w_weight = (
             tensor2 * self.weight[:, :, None, None]
         )  # n x d_constraints x d_tilting x d_tilting
         C2 = C2_w_weight.sum(axis=0)  # d_constraints x d_tilting x d_tilting
 
-        inner_cov_eta_psi = first_part
+        inner_cov_eta_gamma = first_part
         probs_repeat_5 = np.tile(
             self.probs[:, None, None, :, :], (1, d_constraints, d_tilting, 1, 1)
         )
-        inner_cov_eta_psi_w_probs = (
-            inner_cov_eta_psi[:, :, :, :, None] * probs_repeat_5
+        inner_cov_eta_gamma_w_probs = (
+            inner_cov_eta_gamma[:, :, :, :, None] * probs_repeat_5
         )  # n x d_constraints x d_tilting x m x1
-        cov_eta_psi = np.trapezoid(
-            inner_cov_eta_psi_w_probs, self.y_grid.flatten(), axis=3
+        cov_eta_gamma = np.trapezoid(
+            inner_cov_eta_gamma_w_probs, self.y_grid.flatten(), axis=3
         ).squeeze(
             -1
         )  # n x d_constraints x d_tilting
 
         tensor3 = np.einsum(
-            "bij,bk->bijk", cov_eta_psi, expectation_eta.squeeze(-1)
+            "bij,bk->bijk", cov_eta_gamma, expectation_eta.squeeze(-1)
         )  # n x d_constraints x d_tilting x 1
         C3_w_weight = (
             tensor3 * self.weight[:, :, None, None]
@@ -351,10 +399,10 @@ class EstimatorsBinaryOutcome:
             X, np.ones(1)
         )  # n x d_tilting x 1
         self.eta_vectors_0 = self.tilting_spline.get_spline(X, np.zeros(1))
-        self.psi_vectors_1 = self.constraint_spline.get_spline(
+        self.gamma_vectors_1 = self.constraint_spline.get_spline(
             state_col, np.ones(1)
         )  # n x d_constraints x 1
-        self.psi_vectors_0 = self.constraint_spline.get_spline(state_col, np.zeros(1))
+        self.gamma_vectors_0 = self.constraint_spline.get_spline(state_col, np.zeros(1))
 
     def set_theta(self, theta):
         self.theta = theta
@@ -384,32 +432,32 @@ class EstimatorsBinaryOutcome:
         return res
 
     def get_m(self):
-        term1 = self.psi_vectors_1 * self.prob1
-        term0 = self.psi_vectors_0 * self.prob0
+        term1 = self.gamma_vectors_1 * self.prob1
+        term0 = self.gamma_vectors_0 * self.prob0
         term = (term1 + term0) * self.weight
         res = term.sum(axis=0)
         return res
 
     def get_B_matrix(self):
         """
-        psi = n x d_constraints x m
+        gamma = n x d_constraints x m
         eta = n x d_tilting x m
 
         to
 
-        psi n x
+        gamma n x
         """
         expectation_eta = (
             self.eta_vectors_1 * self.prob1 + self.eta_vectors_0 * self.prob0
         )
-        expecatation_psi = (
-            self.psi_vectors_1 * self.prob1 + self.psi_vectors_0 * self.prob0
+        expecatation_gamma = (
+            self.gamma_vectors_1 * self.prob1 + self.gamma_vectors_0 * self.prob0
         )
         z1 = (self.eta_vectors_1 - expectation_eta).squeeze(-1)
-        w1 = (self.psi_vectors_1 - expecatation_psi).squeeze(-1)
+        w1 = (self.gamma_vectors_1 - expecatation_gamma).squeeze(-1)
         term1 = np.einsum("bi,bj->bij", w1, z1)  # n x d_constraints x d_tilting
         z0 = (self.eta_vectors_0 - expectation_eta).squeeze(-1)
-        w0 = (self.psi_vectors_0 - expecatation_psi).squeeze(-1)
+        w0 = (self.gamma_vectors_0 - expecatation_gamma).squeeze(-1)
         term0 = np.einsum("bi,bj->bij", w0, z0)  # n x d_constraints x d_tilting
         term = (term1 * self.prob1 + term0 * self.prob0) * self.weight
         res = term.sum(axis=0)
@@ -464,7 +512,7 @@ class EstimatorsBinaryOutcome:
 
         # TERM1
         part1 = np.matmul(
-            self.psi_vectors_1, np.transpose(self.eta_vectors_1, (0, 2, 1))
+            self.gamma_vectors_1, np.transpose(self.eta_vectors_1, (0, 2, 1))
         )  # n x d_constraints x d_tilting
         expectation_eta = (
             self.eta_vectors_1 * self.prob1
@@ -477,7 +525,7 @@ class EstimatorsBinaryOutcome:
         )  # n x d_constraints x d_tilting x d_tilting
 
         part0 = np.matmul(
-            self.psi_vectors_0, np.transpose(self.eta_vectors_0, (0, 2, 1))
+            self.gamma_vectors_0, np.transpose(self.eta_vectors_0, (0, 2, 1))
         )  # n x d_constraints x d_tilting
         z0 = (self.eta_vectors_0 - expectation_eta).squeeze(-1)  # n x d_tilting
         tensor0 = np.einsum(
@@ -495,8 +543,8 @@ class EstimatorsBinaryOutcome:
         )  # d_constraints x d_tilting x d_tilting
 
         # TERM2
-        expectation_psi = (
-            self.psi_vectors_1 * self.prob1 + self.psi_vectors_0 * self.prob0
+        expectation_gamma = (
+            self.gamma_vectors_1 * self.prob1 + self.gamma_vectors_0 * self.prob0
         ).squeeze(
             -1
         )  # n x d_constraints
@@ -506,7 +554,7 @@ class EstimatorsBinaryOutcome:
             cov_z1 * self.prob1 + cov_z0 * self.prob0
         )  # n x d_tilting x d_tilting
         tensor_term2 = np.einsum(
-            "bi,bjk->bijk", expectation_psi, term2_part2
+            "bi,bjk->bijk", expectation_gamma, term2_part2
         )  # n x d_constraints x d_tilting x d_tilting
         tensor_term2_w_weight = (
             tensor_term2 * self.weight[:, :, :, None]
@@ -748,7 +796,6 @@ def get_smart_initialization(
 def get_exponential_family_state_estimates(
     indicator,
     predictor,
-    predictor_metadata,
     census_dataset,
     online_survey_dataset,
     national_gt_dataset,
@@ -818,22 +865,53 @@ def get_exponential_family_state_estimates(
     lamb = (
         nu[: constraint_spline.d_constraints] - nu[constraint_spline.d_constraints :]
     ).reshape(1, -1)
-    mu_eta = estimators.get_rho().flatten()
 
     if online_survey_dataset.binary_indicator is True:
-        stats_inference = BinaryStatisticalInference(
+
+        (
+            mu1,
+            mu2,
+            covariate_ratio1,
+            covariate_ratio2,
+            online_survey_dataset1,
+            online_survey_dataset2,
+        ) = get_nuisance_parameters(online_survey_dataset, census_dataset)
+
+        inference1 = BinaryCrossFitInference(
             theta,
-            predictor_metadata,
             lamb,
-            mu_eta,
-            moment_group,
-            constraint_m,
-            tilting_spline,
-            constraint_spline,
-            online_survey_dataset,
-            census_dataset,
+            predictor=mu2,
+            covariate_ratio=covariate_ratio2,
+            moment_group=moment_group,
+            constraint_m=constraint_m,
+            tilting_spline=tilting_spline,
+            constraint_spline=constraint_spline,
+            online_survey_dataset=online_survey_dataset1,
+            census_dataset=census_dataset,
         )
-        one_step_nu, asymptotic_variance, n = stats_inference.get_asymptotic_variance()
+
+        inference2 = BinaryCrossFitInference(
+            theta,
+            lamb,
+            predictor=mu1,
+            covariate_ratio=covariate_ratio1,
+            moment_group=moment_group,
+            constraint_m=constraint_m,
+            tilting_spline=tilting_spline,
+            constraint_spline=constraint_spline,
+            online_survey_dataset=online_survey_dataset2,
+            census_dataset=census_dataset,
+        )
+
+        one_step_nu1, asymptotic_variance1, n1 = inference1.get_asymptotic_variance()
+        one_step_nu2, asymptotic_variance2, n2 = inference2.get_asymptotic_variance()
+
+        prop = n1 / (n1 + n2)
+        one_step_nu = prop * one_step_nu1 + (1 - prop) * one_step_nu2
+        asymptotic_variance = (
+            prop * asymptotic_variance1 + (1 - prop) * asymptotic_variance2
+        )
+
         group_to_indexes = (
             census_dataset.df.groupby(evaluation_group)
             .apply(lambda x: x.index.tolist())
@@ -848,11 +926,17 @@ def get_exponential_family_state_estimates(
                 elif type(group) is tuple:
                     res[name] = group[i]
 
-                estimate, (lower, upper) = stats_inference.get_ci(
-                    indexes=indexes,
+                estimate, (lower, upper) = get_ci(
+                    census_dataset=census_dataset,
+                    predictor=predictor,
+                    moment_group=moment_group,
+                    tilting_spline=tilting_spline,
                     one_step_nu=one_step_nu,
+                    theta_idx=inference1.theta_idx,
                     asymptotic_variance=asymptotic_variance,
-                    n=n,
+                    n=n1 + n2,
+                    indexes=indexes,
+                    beta=0.05,
                 )
                 res.update(
                     {

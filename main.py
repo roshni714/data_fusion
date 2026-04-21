@@ -11,11 +11,15 @@ from regressor import (
     get_cond_density_estimator,
     get_continuous_conditional_predictor,
 )
-from estimation import get_state_estimates, get_exponential_family_state_estimates
+from estimation import (
+    get_state_estimates,
+    get_exponential_family_state_estimates,
+    get_raw_state_estimates,
+)
 from model_free_estimation import get_model_free_exponential_family_state_estimates
 from reporting import save_predictions, save_evaluation
 from evaluate import evaluate_predictions
-from covariate_balance import get_covariate_balance
+from covariate_balance import get_covariate_balance, get_covariate_ratio_classifier
 import yaml
 
 
@@ -63,6 +67,17 @@ def main(config="configs/RECVDVACC/online_unadjusted.yaml"):
             attrs = evaluation_group + [indicator]
             state_estimates = national_gt_dataset.df[attrs]
 
+        elif method == "state_raw":
+            online_survey_dataset = load_online_survey_data(
+                indicator=indicator, startdate=startdate, enddate=enddate
+            )
+
+            state_estimates = get_raw_state_estimates(
+                indicator,
+                online_survey_dataset=online_survey_dataset,
+                evaluation_group=evaluation_group,
+            )
+
         elif method == "state_unadjusted":
             online_survey_dataset = load_online_survey_data(
                 indicator=indicator, startdate=startdate, enddate=enddate
@@ -72,7 +87,7 @@ def main(config="configs/RECVDVACC/online_unadjusted.yaml"):
             )
             if indicator != "synthetic":
 
-                _, covariate_ratio = get_covariate_balance(
+                covariate_ratio = get_covariate_ratio_classifier(
                     online_survey_dataset, census_dataset
                 )
             else:
@@ -103,20 +118,21 @@ def main(config="configs/RECVDVACC/online_unadjusted.yaml"):
             )
 
             if train_dataset.binary_indicator:
-                predictor, predictor_metadata = get_binary_conditional_predictor(
-                    train_dataset, validation_dataset, covariate_ratio=None
+                covariate_ratio = get_covariate_ratio_classifier(
+                    online_survey_dataset, census_dataset
+                )
+                predictor, _ = get_binary_conditional_predictor(
+                    train_dataset, validation_dataset, covariate_ratio=covariate_ratio
                 )
 
             else:
                 predictor = get_cond_density_estimator(
                     train_dataset, validation_dataset
                 )
-                predictor_metadata = None
 
             state_estimates = get_exponential_family_state_estimates(
                 indicator=indicator,
                 predictor=predictor,
-                predictor_metadata=predictor_metadata,
                 regions=regions,
                 census_dataset=census_dataset,
                 online_survey_dataset=online_survey_dataset,
@@ -140,7 +156,7 @@ def main(config="configs/RECVDVACC/online_unadjusted.yaml"):
             )
 
             if indicator != "synthetic":
-                _, covariate_ratio = get_covariate_balance(
+                covariate_ratio = get_covariate_ratio_classifier(
                     online_survey_dataset, census_dataset
                 )
             else:
@@ -168,7 +184,13 @@ def main(config="configs/RECVDVACC/online_unadjusted.yaml"):
         save_predictions(
             state_estimates, prediction_path, startdate=startdate, enddate=enddate
         )
-        if method in ["state_unadjusted", "state_adjusted", "national", "model_free"]:
+        if method in [
+            "state_raw",
+            "state_unadjusted",
+            "state_adjusted",
+            "national",
+            "model_free",
+        ]:
             eval = evaluate_predictions(
                 state_estimates, state_gt_dataset, indicator, evaluation_group
             )

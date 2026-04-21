@@ -19,6 +19,7 @@ COLORS = {
     "state_adjusted_balancing_X": "#fe6100",
     "state_adjusted": "#fe6100",
     "model_free": "#648FFF",
+    "state_raw": "#f2b0d3",
 }
 
 LINESTYLES = {
@@ -27,15 +28,26 @@ LINESTYLES = {
     "state_unadjusted": "-",
     "state_adjusted": "--",
     "state_adjusted_balancing_X": "-",
+    "state_raw": "-",
+}
+
+MARKERS = {
+    "ground_truth": "o",
+    "national": "o",
+    "state_unadjusted": "o",
+    "state_adjusted": "o",
+    "state_adjusted_balancing_X": "o",
+    "state_raw": "",
 }
 
 LABELS = {
     "ground_truth": "Ground Truth",
     "national": "Agg Admin Only",
-    "state_unadjusted": "Online Survey Only",
+    "state_unadjusted": "Online Survey Only\n (w/ X-Reweighting)",
     "state_adjusted_balancing_X": "Data Fusion\n" + r"$\eta(x, y) = xy$",
     "state_adjusted": "Data Fusion\n" + r"$\eta(x, y) =y$",
     "model_free": "Model-Free",
+    "state_raw": "Online Survey Only",
 }
 
 TITLES = {
@@ -184,7 +196,7 @@ def main_prediction_plot(show_methods=[]):
 
             # Create the legend with sorted labels and handles
             ax.legend(sorted_handles, sorted_labels, fontsize=fontsize * 0.75)
-    n_show_methods = len(show_methods)
+    n_show_methods = str(show_methods)
     plt.tight_layout()
     plt.savefig(f"{plots_dir}/pred_{n_show_methods}.pdf", bbox_inches="tight")
     plt.close()  # Close the figure to free memory
@@ -566,6 +578,8 @@ def main():
 
     SHOW_METHODS = [
         [],
+        ["state_raw"],
+        ["state_unadjusted", "state_raw"],
         ["national"],
         ["national", "state_unadjusted"],
         ["national", "state_unadjusted", "state_adjusted"],
@@ -575,7 +589,7 @@ def main():
     for set_of_methods in SHOW_METHODS:
         main_prediction_plot(show_methods=set_of_methods)
     main_mae_plot(show_methods=SHOW_METHODS[-1], nregions=1)
-    synthetic_data_plot()
+    # synthetic_data_plot()
 
 
 if __name__ == "__main__":

@@ -44,6 +44,6 @@ def generate_learn_run(indicator):
             print("sleep 1", file=f)
 
 
-indicators = ["medicaid_ins", "snap", "RECVDVACC"]
+indicators = ["snap", "medicaid_ins", "RECVDVACC"]
 for indicator in indicators:
     generate_learn_run(indicator)
