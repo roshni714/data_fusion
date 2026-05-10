@@ -357,7 +357,8 @@ def plot_predictions(indicator, group_name="state_name"):
         if sorted_pairs:
             sorted_labels, sorted_handles = zip(*sorted_pairs)
             plt.legend(sorted_handles, sorted_labels)
-        plt.savefig(f"{plots_dir}/{date}.pdf", bbox_inches="tight")
+        date_new = date.replace(" ", "_")
+        plt.savefig(f"{plots_dir}/{date_new}.pdf", bbox_inches="tight")
         plt.close()  # Close the figure to free memory
 
 
@@ -580,7 +581,6 @@ def main():
         [],
         ["state_raw"],
         ["state_unadjusted", "state_raw"],
-        ["national"],
         ["national", "state_unadjusted"],
         ["national", "state_unadjusted", "state_adjusted"],
         ["national", "state_unadjusted", "state_adjusted", "model_free"],

@@ -215,29 +215,46 @@ class BinaryCrossFitInference:
         psi = torch.cat([final_d_l, final_m], dim=1)
         return psi
 
-    def _get_jacobian(self):
+    def _get_jacobian(self, nu):
 
         def helper_psi(nu):
             self.nu = nu
             psi = self._get_psi().mean(dim=0)
             return psi
 
-        jacobian_psi = jacobian(helper_psi, self.nu)
+        jacobian_psi = jacobian(helper_psi, nu)
         return jacobian_psi
-
-    def get_asymptotic_variance(self):
+    
+    def get_one_step(self):
         psi = self._get_psi()
         psi_mean = psi.mean(dim=0)
-        n = len(self.online_survey_dataset)
+        jacobian_psi =self._get_jacobian(self.nu)
+        return self.nu - torch.linalg.inv(jacobian_psi) @ psi_mean, len(self.online_survey_dataset)
+
+
+
+def get_asymptotic_variance(inference1, inference2, one_step_nu):
+
+    def get_asymptotic_variance_helper(inference):
+        inference.nu = one_step_nu
+
+        psi = inference._get_psi()
+        n = len(inference.online_survey_dataset)
         sigma_mean = torch.einsum("bi,bj->bij", psi, psi).mean(dim=0)
-        jacobian_psi = self._get_jacobian()
+        jacobian_psi = inference._get_jacobian(one_step_nu)
         asymptotic_variance = (
             torch.linalg.inv(jacobian_psi)
             @ sigma_mean
             @ torch.linalg.inv(jacobian_psi).T
         )
-        one_step_nu = self.nu - torch.linalg.inv(jacobian_psi) @ psi_mean
-        return one_step_nu, asymptotic_variance, n
+        return asymptotic_variance, n
+    
+    asymptotic_variance1, n1 = get_asymptotic_variance_helper(inference1)
+    asymptotic_variance2, n2 = get_asymptotic_variance_helper(inference2)
+    prop = n1 / (n1 + n2)
+    asymptotic_variance = prop * asymptotic_variance1 + (1 - prop) * asymptotic_variance2
+    return asymptotic_variance
+    
 
 
 def get_ci(

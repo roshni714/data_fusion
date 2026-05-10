@@ -7,7 +7,7 @@ from splines import (
     TiltingSpline,
     ConstraintSpline,
 )
-from inference import BinaryCrossFitInference, get_ci
+from inference import BinaryCrossFitInference, get_ci, get_asymptotic_variance
 
 from regressor import get_binary_conditional_predictor
 from covariate_balance import get_covariate_balance, get_covariate_ratio_classifier
@@ -903,14 +903,13 @@ def get_exponential_family_state_estimates(
             census_dataset=census_dataset,
         )
 
-        one_step_nu1, asymptotic_variance1, n1 = inference1.get_asymptotic_variance()
-        one_step_nu2, asymptotic_variance2, n2 = inference2.get_asymptotic_variance()
+        one_step_nu1, n1 = inference1.get_one_step()
+        one_step_nu2, n2 = inference2.get_one_step()
 
         prop = n1 / (n1 + n2)
         one_step_nu = prop * one_step_nu1 + (1 - prop) * one_step_nu2
-        asymptotic_variance = (
-            prop * asymptotic_variance1 + (1 - prop) * asymptotic_variance2
-        )
+
+        asymptotic_variance = get_asymptotic_variance(inference1, inference2, one_step_nu)
 
         group_to_indexes = (
             census_dataset.df.groupby(evaluation_group)
